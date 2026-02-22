@@ -397,6 +397,203 @@ def upload_file(file_path: str) -> dict:
 
 
 @mcp.tool()
+def list_people() -> list[dict]:
+    """List all face clusters (people) recognized in your Amazon Photos library.
+
+    Returns each person's name, cluster ID, and photo count. Unnamed clusters
+    are labeled "(unnamed)".
+
+    Returns:
+        List of people with name, cluster_id, and count.
+    """
+    ap = _get_client()
+    people = ap.aggregations("allPeople", out="")
+    results = []
+    for entry in people:
+        name = entry.get("searchData", {}).get("clusterName") or "(unnamed)"
+        results.append({
+            "name": name,
+            "cluster_id": entry["value"],
+            "count": entry["count"],
+            "node_id": entry.get("searchData", {}).get("nodeId"),
+        })
+    results.sort(key=lambda x: x["count"], reverse=True)
+    return results
+
+
+@mcp.tool()
+def search_by_person(person: str, max_results: int = 50) -> list[dict]:
+    """Search photos containing a specific person by name or cluster ID.
+
+    Args:
+        person: Person's name (e.g. "Lara") or cluster ID. Name matching is case-insensitive.
+        max_results: Maximum results to return (default 50, max 200).
+
+    Returns:
+        List of photo items containing the specified person.
+    """
+    ap = _get_client()
+    max_results = min(max_results, 200)
+
+    # Resolve name to cluster ID
+    cluster_id = None
+    people = ap.aggregations("allPeople", out="")
+    for entry in people:
+        cname = entry.get("searchData", {}).get("clusterName", "")
+        if cname and cname.lower() == person.lower():
+            cluster_id = entry["value"]
+            break
+    # If no name match, treat input as a cluster ID directly
+    if cluster_id is None:
+        cluster_id = person
+
+    df = ap.query(f"type:(PHOTOS) clusterId:({cluster_id})")
+    return _safe_df_to_list(df, max_results)
+
+
+@mcp.tool()
+def find_duplicates(max_groups: int = 50) -> dict:
+    """Find exact duplicate files in your library by MD5 hash.
+
+    Uses the local parquet database to identify files sharing the same MD5.
+    Does NOT modify anything — read-only analysis.
+
+    Args:
+        max_groups: Maximum duplicate groups to return (default 50).
+
+    Returns:
+        Summary with total_duplicate_files, removable_copies, and duplicate groups
+        showing each file's id, name, folder, and creation date.
+    """
+    import pandas as pd
+
+    ap = _get_client()
+    db = ap.db
+
+    if "md5" not in db.columns:
+        return {"error": "md5 column not found in database. Try refreshing the DB first."}
+
+    # Find MD5s with more than one file
+    md5_counts = db.groupby("md5").size()
+    dupe_md5s = md5_counts[md5_counts > 1]
+
+    if dupe_md5s.empty:
+        return {"total_duplicate_files": 0, "removable_copies": 0, "groups": []}
+
+    total_files = int(dupe_md5s.sum())
+    removable = int(total_files - len(dupe_md5s))
+
+    # Build group details
+    dupe_rows = db[db["md5"].isin(dupe_md5s.index)].copy()
+    groups = []
+    for md5_hash, group_df in dupe_rows.groupby("md5"):
+        if len(groups) >= max_groups:
+            break
+        files = []
+        for _, row in group_df.iterrows():
+            files.append({
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "folder": row.get("parentMap.FOLDER") if not _is_nan(row.get("parentMap.FOLDER")) else None,
+                "createdDate": str(row.get("createdDate")) if not _is_nan(row.get("createdDate")) else None,
+                "size": int(row["size"]) if not _is_nan(row.get("size")) else None,
+            })
+        files.sort(key=lambda f: f["createdDate"] or "")
+        groups.append({
+            "md5": str(md5_hash),
+            "count": len(files),
+            "files": files,
+        })
+
+    groups.sort(key=lambda g: g["count"], reverse=True)
+
+    return {
+        "total_duplicate_files": total_files,
+        "removable_copies": removable,
+        "total_groups": len(dupe_md5s),
+        "groups_shown": len(groups),
+        "groups": groups,
+    }
+
+
+@mcp.tool()
+def trash_duplicates(
+    md5_hashes: list[str] | None = None,
+    dry_run: bool = True,
+) -> dict:
+    """Trash duplicate copies, keeping the oldest (original) of each MD5 group.
+
+    For each group of files sharing the same MD5, keeps the file with the earliest
+    createdDate and trashes the rest. Items go to Amazon Photos trash (recoverable
+    for 30 days).
+
+    Args:
+        md5_hashes: Optional list of specific MD5 hashes to process. If None, processes ALL duplicates.
+        dry_run: If True (default), only preview what would be trashed. Set False to actually trash.
+
+    Returns:
+        Summary of action taken, groups processed, files kept, and files trashed.
+    """
+    import pandas as pd
+
+    ap = _get_client()
+    db = ap.db
+
+    if "md5" not in db.columns:
+        return {"error": "md5 column not found in database."}
+
+    # Find duplicate MD5s
+    md5_counts = db.groupby("md5").size()
+    dupe_md5s = set(md5_counts[md5_counts > 1].index)
+
+    if md5_hashes is not None:
+        # Filter to only requested hashes that are actually dupes
+        dupe_md5s = dupe_md5s & set(md5_hashes)
+
+    if not dupe_md5s:
+        return {"action": "dry_run" if dry_run else "trashed", "groups_processed": 0,
+                "files_trashed": 0, "files_kept": 0, "message": "No duplicates found to process."}
+
+    dupe_rows = db[db["md5"].isin(dupe_md5s)].copy()
+
+    trash_ids = []
+    keep_ids = []
+    for md5_hash, group_df in dupe_rows.groupby("md5"):
+        # Sort by createdDate ascending — keep the oldest
+        sorted_group = group_df.sort_values("createdDate", ascending=True, na_position="last")
+        keep_id = sorted_group.iloc[0]["id"]
+        keep_ids.append(keep_id)
+        for _, row in sorted_group.iloc[1:].iterrows():
+            trash_ids.append(row["id"])
+
+    result = {
+        "action": "dry_run" if dry_run else "trashed",
+        "groups_processed": len(dupe_md5s),
+        "files_kept": len(keep_ids),
+        "files_trashed": len(trash_ids),
+    }
+
+    if dry_run:
+        result["message"] = f"Would trash {len(trash_ids)} duplicate copies across {len(dupe_md5s)} groups. Set dry_run=False to execute."
+        # Show a sample of what would be trashed
+        sample_size = min(10, len(trash_ids))
+        sample_rows = db[db["id"].isin(trash_ids[:sample_size])]
+        result["sample_trashed"] = [
+            {"id": row["id"], "name": row.get("name"), "md5": row.get("md5")}
+            for _, row in sample_rows.iterrows()
+        ]
+    else:
+        # Actually trash in batches of 100
+        batch_size = 100
+        for i in range(0, len(trash_ids), batch_size):
+            batch = trash_ids[i:i + batch_size]
+            ap.trash(batch)
+        result["message"] = f"Trashed {len(trash_ids)} duplicate copies. Items are recoverable from trash for 30 days."
+
+    return result
+
+
+@mcp.tool()
 def download_files(node_ids: list[str], output_dir: str = "") -> dict:
     """Download files from Amazon Photos by node ID.
 

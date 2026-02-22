@@ -35,7 +35,7 @@ wheels = [
 [[package]]
 name = "amazon-photos"
 version = "0.0.97"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/kpfitzgerald/amazon_photos.git?rev=main#029fd12015b0c52085184439e52568ae6454da0b" }
 dependencies = [
     { name = "aiofiles" },
     { name = "httpx", extra = ["http2"] },
@@ -44,17 +44,14 @@ dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "psutil" },
+    { name = "pyarrow" },
     { name = "tqdm" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/33/7e/3a0aa08826cbf928dd8b15f57119430aeecea9fedc824fd3a24dc7dc487b/amazon-photos-0.0.97.tar.gz", hash = "sha256:785d59b8756821d30ede67a25e376fd4fadd08b25a3af329d933cb16ac387381", size = 26155, upload-time = "2024-01-13T20:33:13.335Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/f8/27e0939b5505e4fbeb1938ede117d19556b0aa82dd60484bef51266ff063/amazon_photos-0.0.97-py3-none-any.whl", hash = "sha256:d4028fa714c1b7039b544db06c482766b1b57ffb9326c8a3affeb21891112540", size = 21247, upload-time = "2024-01-13T20:33:10.962Z" },
 ]
 
 [[package]]
 name = "amazon-photos-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "amazon-photos" },
@@ -65,7 +62,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amazon-photos", specifier = ">=0.0.97" },
+    { name = "amazon-photos", git = "https://github.com/kpfitzgerald/amazon_photos.git?rev=main" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "httpx" },
     { name = "pyarrow" },
