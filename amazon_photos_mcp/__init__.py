@@ -216,26 +216,17 @@ def get_aggregations(category: str = "all") -> dict:
     Returns:
         Aggregation data with counts and identifiers.
     """
-    import tempfile
-
     ap = _get_client()
-    # The upstream lib writes JSON files to CWD during aggregations.
-    # Use a temp dir to avoid polluting the user's working directory.
-    original_dir = os.getcwd()
-    tmp_dir = tempfile.mkdtemp(prefix="ap_agg_")
-    os.chdir(tmp_dir)
-    try:
-        result = ap.aggregations(category)
-        if hasattr(result, "json"):
-            return result.json()
-        if hasattr(result, "to_dict"):
-            return result.to_dict()
-        return {"aggregations": str(result)}
-    finally:
-        os.chdir(original_dir)
-        # Clean up temp files
-        import shutil
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    # Pass out='' to skip disk writes — upstream has a bug where it creates
+    # a directory named e.g. "things.json" then tries to write bytes to it.
+    result = ap.aggregations(category, out='')
+    if isinstance(result, dict):
+        return result
+    if hasattr(result, "json"):
+        return result.json()
+    if hasattr(result, "to_dict"):
+        return result.to_dict()
+    return {"aggregations": str(result)}
 
 
 @mcp.tool()
