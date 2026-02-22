@@ -14,5 +14,8 @@ dependencies = [
     "pyarrow",
 ]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project.scripts]
 amazon-photos-mcp = "amazon_photos_mcp:main"
