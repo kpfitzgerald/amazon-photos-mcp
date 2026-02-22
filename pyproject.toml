@@ -9,7 +9,7 @@ description = "FastMCP server for Amazon Photos — search, browse, upload, down
 requires-python = ">=3.10.10"
 dependencies = [
     "fastmcp>=2.0.0",
-    "amazon-photos>=0.0.97",
+    "amazon-photos @ git+https://github.com/kpfitzgerald/amazon_photos.git@main",
     "httpx",
     "pyarrow",
 ]
