@@ -78,10 +78,13 @@ Tested 2026-02-21 against Kelly's Amazon account:
 ## What Needs To Be Done
 
 ### Testing (Before Contributing)
-- [ ] Test all 15 MCP tools through Claude Code interactively
-- [ ] Verify search_photos with various query filters
-- [ ] Test upload/download cycle
-- [ ] Test trash/restore cycle
+- [x] Test all 15 MCP tools through Claude Code interactively (2026-02-21)
+- [x] Verify search_photos with various query filters (type, year, name, things)
+- [x] Test download cycle (download_files: PASS)
+- [x] Test trash/restore cycle (trash → list_trashed → restore: PASS)
+- [ ] Test upload cycle (fix applied, needs server restart to verify)
+- [ ] Test get_aggregations (fix applied, needs server restart to verify)
+- [ ] Test list_folders (fix applied, needs server restart to verify)
 - [ ] Test with expired cookies (graceful error messaging)
 - [ ] Long-running stability (does the parquet DB update correctly?)
 
@@ -111,6 +114,38 @@ Tested 2026-02-21 against Kelly's Amazon account:
 5. **Verify** — API confirmed working: 27,599 photos, 1,339 videos, 287 folders
 6. **Publish** — initialized git, pushed to GitHub (`kpfitzgerald/amazon-photos-mcp`)
 7. **Organize** — moved to Windows git dir with WSL symlink (applied to all 7 custom MCP servers)
+
+### Session 2 (2026-02-21)
+Interactive testing of all 15 MCP tools. Results:
+
+| # | Tool | Status | Notes |
+|---|------|--------|-------|
+| 1 | check_connection | PASS | Cookies valid, 27,599 photos confirmed |
+| 2 | get_storage_usage | PASS | Returns usage table correctly |
+| 3 | get_photos | PASS | Returns recent photos with full EXIF metadata |
+| 4 | get_videos | PASS | Returns recent videos with codec/duration metadata |
+| 5 | get_aggregations | FAIL→FIXED | Upstream writes JSON to CWD; created `things.json` dir. Fixed with temp dir. |
+| 6 | search_photos | PASS | Tested with type, timeYear, name filters |
+| 7 | search_by_date | PASS | Found Dec 2024 photos correctly |
+| 8 | search_by_things | PASS | Found dog photos via Amazon's auto-labels |
+| 9 | list_folders | FAIL→FIXED | Upstream returns list, not DataFrame. Fixed _safe_df_to_list. |
+| 10 | get_folder_tree | PASS | Full 287-folder tree with ANSI colors |
+| 11 | list_trashed | PASS | Empty list when clean, populated after trash |
+| 12 | trash_items | PASS | Trashed photo, verified status=TRASH |
+| 13 | restore_items | PASS | Restored photo, verified status=AVAILABLE |
+| 14 | download_files | PASS | Downloaded 761KB HEIC to /tmp correctly |
+| 15 | upload_file | FAIL→FIXED | Upstream expects directory, not file. Fixed with temp dir wrapper. |
+
+**Bugs found in our MCP server (fixed in commit 3528471):**
+1. `_safe_df_to_list` crashed on list return from `get_folders()`
+2. `_safe_df_to_list` returned duplicate rows (upstream parquet DB issue) — added dedup by `id`
+3. `get_aggregations` polluted CWD with JSON files — redirected to temp dir
+4. `upload_file` passed file path to `upload()` which expects directory — wrapped in temp dir
+5. `download_files` defaulted to CWD — changed to `~/Downloads/amazon-photos/`
+
+**Bug #5 found in upstream lib:** Duplicate rows in parquet DB (every query returns each result twice)
+
+**3 fixes need server restart to verify:** upload_file, get_aggregations, list_folders
 
 ## Runbook: Refreshing Cookies
 
