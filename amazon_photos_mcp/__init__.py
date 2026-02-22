@@ -79,9 +79,17 @@ def _load_cookies() -> dict | None:
 
 
 def _safe_df_to_list(df, max_results: int = 50) -> list[dict]:
-    """Convert a pandas DataFrame to a list of dicts, handling edge cases."""
-    if df is None or (hasattr(df, "empty") and df.empty):
+    """Convert a pandas DataFrame (or list) to a list of dicts, handling edge cases."""
+    if df is None:
         return []
+    # Handle plain list (e.g. from get_folders())
+    if isinstance(df, list):
+        return df[:max_results]
+    if hasattr(df, "empty") and df.empty:
+        return []
+    # Deduplicate by 'id' column if present (upstream parquet DB has dupes)
+    if "id" in df.columns:
+        df = df.drop_duplicates(subset=["id"])
     records = df.head(max_results).to_dict(orient="records")
     # Clean up NaN/NaT values for JSON serialization
     clean = []
@@ -208,13 +216,26 @@ def get_aggregations(category: str = "all") -> dict:
     Returns:
         Aggregation data with counts and identifiers.
     """
+    import tempfile
+
     ap = _get_client()
-    result = ap.aggregations(category)
-    if hasattr(result, "json"):
-        return result.json()
-    if hasattr(result, "to_dict"):
-        return result.to_dict()
-    return {"aggregations": str(result)}
+    # The upstream lib writes JSON files to CWD during aggregations.
+    # Use a temp dir to avoid polluting the user's working directory.
+    original_dir = os.getcwd()
+    tmp_dir = tempfile.mkdtemp(prefix="ap_agg_")
+    os.chdir(tmp_dir)
+    try:
+        result = ap.aggregations(category)
+        if hasattr(result, "json"):
+            return result.json()
+        if hasattr(result, "to_dict"):
+            return result.to_dict()
+        return {"aggregations": str(result)}
+    finally:
+        os.chdir(original_dir)
+        # Clean up temp files
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @mcp.tool()
@@ -353,7 +374,7 @@ def restore_items(node_ids: list[str]) -> dict:
 def upload_file(file_path: str) -> dict:
     """Upload a file to Amazon Photos.
 
-    Preserves directory structure. Deduplicates via MD5 hash.
+    Deduplicates via MD5 hash — re-uploading the same file is a no-op.
 
     Args:
         file_path: Absolute path to the file to upload.
@@ -361,6 +382,9 @@ def upload_file(file_path: str) -> dict:
     Returns:
         Upload result with node ID of the uploaded file.
     """
+    import shutil
+    import tempfile
+
     path = Path(file_path)
     if not path.exists():
         return {"error": f"File not found: {file_path}"}
@@ -368,10 +392,17 @@ def upload_file(file_path: str) -> dict:
         return {"error": f"Not a file: {file_path}"}
 
     ap = _get_client()
-    result = ap.upload(str(path))
-    if hasattr(result, "json"):
-        return result.json()
-    return {"status": "uploaded", "path": str(path)}
+    # Upstream upload() expects a directory and uses rglob('*').
+    # Wrap single file in a temp directory for upload.
+    tmp_dir = tempfile.mkdtemp(prefix="ap_upload_")
+    try:
+        shutil.copy2(str(path), os.path.join(tmp_dir, path.name))
+        result = ap.upload(tmp_dir)
+        if isinstance(result, list) and result:
+            return {"status": "uploaded", "file": path.name, "results": result}
+        return {"status": "uploaded", "file": path.name, "results": result}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @mcp.tool()
@@ -380,25 +411,27 @@ def download_files(node_ids: list[str], output_dir: str = "") -> dict:
 
     Args:
         node_ids: List of node IDs to download.
-        output_dir: Optional output directory (defaults to current dir).
+        output_dir: Output directory (defaults to ~/Downloads/amazon-photos/).
 
     Returns:
-        Download result with file paths.
+        Download result with file paths and output directory.
     """
-    ap = _get_client()
-    if output_dir:
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        original_dir = os.getcwd()
-        os.chdir(output_dir)
+    import tempfile
 
+    ap = _get_client()
+    if not output_dir:
+        output_dir = str(Path.home() / "Downloads" / "amazon-photos")
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    original_dir = os.getcwd()
+    os.chdir(output_dir)
     try:
         result = ap.download(node_ids)
         if hasattr(result, "json"):
             return result.json()
-        return {"status": "downloaded", "count": len(node_ids), "output_dir": output_dir or os.getcwd()}
+        return {"status": "downloaded", "count": len(node_ids), "output_dir": output_dir}
     finally:
-        if output_dir:
-            os.chdir(original_dir)
+        os.chdir(original_dir)
 
 
 # --- Entrypoint ---
