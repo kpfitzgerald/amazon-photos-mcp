@@ -71,6 +71,12 @@ Tested 2026-02-21 against Kelly's Amazon account:
 - **Issue:** On 401 errors, logs "Cookies expired" but continues retrying (up to 12 times with exponential backoff, ~3+ minutes total). Then returns `None` silently instead of raising. Caller gets cryptic `AttributeError: 'NoneType' object has no attribute 'json'`.
 - **Upstream fix:** Should raise after first 401 with a clear error message.
 
+### Bug 6: `aggregations()` mkdir/write Conflict for Specific Categories
+- **Location:** `_api.py` → `aggregations()`, non-"all" branch
+- **Issue:** For specific categories (e.g. "things"), creates `Path("things.json").mkdir()` (a directory), then immediately tries `Path("things.json").write_bytes()` → `IsADirectoryError`. The `mkdir` call was copy-pasted from the "all" branch where it makes sense (creating an output directory), but is wrong for single-category output.
+- **Our workaround:** Pass `out=''` to skip disk writes entirely (we only need the return value).
+- **Upstream fix:** Remove the `mkdir` call for single-category aggregations, or use different path logic.
+
 ### Open Issues on Upstream Repo
 - **#24** "Does this library still work?" (Apr 2025) — unanswered
 - **#22** "No Auth Method Provided" (2024) — likely the same cookie format bug
@@ -82,9 +88,9 @@ Tested 2026-02-21 against Kelly's Amazon account:
 - [x] Verify search_photos with various query filters (type, year, name, things)
 - [x] Test download cycle (download_files: PASS)
 - [x] Test trash/restore cycle (trash → list_trashed → restore: PASS)
-- [ ] Test upload cycle (fix applied, needs server restart to verify)
-- [ ] Test get_aggregations (fix applied, needs server restart to verify)
-- [ ] Test list_folders (fix applied, needs server restart to verify)
+- [x] Test upload cycle (2026-02-21, after restart — uploaded test file, got 201 Created)
+- [x] Test get_aggregations (2026-02-21, after restart — returns dict with aggregation data)
+- [x] Test list_folders (2026-02-21, after restart — returns 200 folders)
 - [ ] Test with expired cookies (graceful error messaging)
 - [ ] Long-running stability (does the parquet DB update correctly?)
 
@@ -94,8 +100,10 @@ Tested 2026-02-21 against Kelly's Amazon account:
 3. **Fix Bug 2:** Add `pyarrow` to dependencies in `pyproject.toml`
 4. **Fix Bug 3:** Fix `\!` escape sequence for Python 3.14+ compat
 5. **Fix Bug 4:** Fail fast on 401 instead of retrying 12 times
-6. **Open PRs** — one per bug for clean review
-7. If maintainer is unresponsive, maintain our fork as the active version
+6. **Fix Bug 5:** Deduplicate rows in parquet DB (every query returns each result twice)
+7. **Fix Bug 6:** Remove `mkdir` for single-category aggregations (causes IsADirectoryError)
+8. **Open PRs** — one per bug for clean review
+9. If maintainer is unresponsive, maintain our fork as the active version
 
 ### MCP Server Improvements (Post-Testing)
 - [ ] Add `search_by_location` tool (library supports location filters)
@@ -124,7 +132,7 @@ Interactive testing of all 15 MCP tools. Results:
 | 2 | get_storage_usage | PASS | Returns usage table correctly |
 | 3 | get_photos | PASS | Returns recent photos with full EXIF metadata |
 | 4 | get_videos | PASS | Returns recent videos with codec/duration metadata |
-| 5 | get_aggregations | FAIL→FIXED | Upstream writes JSON to CWD; created `things.json` dir. Fixed with temp dir. |
+| 5 | get_aggregations | FAIL→FIXED | Upstream mkdir/write bug. Initial temp dir fix insufficient; final fix: pass `out=''` to skip writes. |
 | 6 | search_photos | PASS | Tested with type, timeYear, name filters |
 | 7 | search_by_date | PASS | Found Dec 2024 photos correctly |
 | 8 | search_by_things | PASS | Found dog photos via Amazon's auto-labels |
@@ -145,7 +153,22 @@ Interactive testing of all 15 MCP tools. Results:
 
 **Bug #5 found in upstream lib:** Duplicate rows in parquet DB (every query returns each result twice)
 
-**3 fixes need server restart to verify:** upload_file, get_aggregations, list_folders
+### Session 3 (2026-02-21)
+Post-restart verification of the 3 fixed tools:
+
+| Tool | Status | Notes |
+|------|--------|-------|
+| list_folders | PASS | 200 folders returned. Fix was correct; uvx cache was serving stale code. |
+| get_aggregations | FAIL→FIXED | Initial temp dir workaround failed — upstream has a second bug: `mkdir("things.json")` then `write_bytes` to it (Bug #6). Proper fix: pass `out=''` to skip disk writes entirely. |
+| upload_file | PASS | Test file uploaded (201 Created), upstream DB refreshed. |
+
+**Key discovery:** `uv cache clean --force` was required to clear 2.9 GiB of stale cached builds. The MCP server was running old code despite git commits. This is now documented as a lesson learned.
+
+**Bug #6 found in upstream lib:** `aggregations()` for specific categories calls `Path(f"{category}.json").mkdir()` then `write_bytes()` to the same path → `IsADirectoryError`.
+
+**Commit:** `d3f49a5` — replaced temp dir workaround with `out=''` parameter.
+
+**All 15 tools now verified working.** 6 upstream bugs documented, ready to fork and PR.
 
 ## Runbook: Refreshing Cookies
 
