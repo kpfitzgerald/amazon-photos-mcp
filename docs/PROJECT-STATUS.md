@@ -5,7 +5,7 @@
 FastMCP server wrapping the unofficial [amazon-photos](https://github.com/trevorhobenshield/amazon_photos) Python library (MIT license, by trevorhobenshield). Provides 15 tools for Claude Code to search, browse, upload, download, and manage an Amazon Photos library.
 
 - **Repo:** https://github.com/kpfitzgerald/amazon-photos-mcp
-- **Local:** `~/amazon-photos-mcp/`
+- **Local:** `~/amazon-photos-mcp/` (symlink → `/mnt/c/Users/kungf/OneDrive/Documents/git/amazon-photos-mcp/`)
 - **Registered:** `claude mcp add --scope user amazon-photos -- uvx --from ~/amazon-photos-mcp amazon-photos-mcp`
 - **Auth:** Cookie-based (`~/.config/amazon-photos-mcp/cookies.json`, chmod 600)
 - **Database:** `~/.config/amazon-photos-mcp/ap.parquet` (local cache of photo metadata)
@@ -100,3 +100,37 @@ Tested 2026-02-21 against Kelly's Amazon account:
 - [ ] Add album management tools (create, add to, list contents)
 - [ ] Consider batch download with progress reporting
 - [ ] Add cookie refresh reminder (warn when approaching expiry)
+
+## Build Timeline
+
+### Session 1 (2026-02-21)
+1. **Research** — confirmed official API deprecated, found `amazon-photos` lib (MIT, v0.0.97, Jan 2024), no existing MCP server
+2. **Build** — created FastMCP server with 15 tools, modeled after book-library-mcp
+3. **Auth** — used Playwright to open Amazon Photos in browser, user signed in interactively, extracted cookies via `page.context().cookies()`, saved to config
+4. **Debug** — discovered TLD detection bug (`amazon.none`), fixed with cookie normalization; discovered missing pyarrow dep, added to deps
+5. **Verify** — API confirmed working: 27,599 photos, 1,339 videos, 287 folders
+6. **Publish** — initialized git, pushed to GitHub (`kpfitzgerald/amazon-photos-mcp`)
+7. **Organize** — moved to Windows git dir with WSL symlink (applied to all 7 custom MCP servers)
+
+## Runbook: Refreshing Cookies
+
+Cookies expire periodically. When `check_connection` returns auth errors:
+
+### Option A: Playwright (automated)
+```
+1. Open Playwright browser to https://www.amazon.com/photos
+2. Sign in if prompted (interactive)
+3. Extract via: page.context().cookies('https://www.amazon.com')
+4. Save ubid_main, at_main, session-id to ~/.config/amazon-photos-mcp/cookies.json
+```
+
+### Option B: Manual DevTools
+```
+1. Open https://www.amazon.com/photos in Chrome
+2. F12 → Application → Cookies → amazon.com
+3. Copy: ubid-main (save as ubid_main), at-main (save as at_main), session-id
+4. Update ~/.config/amazon-photos-mcp/cookies.json
+```
+
+Note: Browser shows hyphens (`ubid-main`), config file uses underscores (`ubid_main`).
+The MCP server's `_normalize_cookies()` handles both formats.
